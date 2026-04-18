@@ -1970,7 +1970,17 @@ app.get('/api/insights-automaticos', autorizar('insights:ver'), async (req, res)
     const snapshot = await db.collection('rutas').get();
     snapshot.forEach((doc) => rutas.push({ id: doc.id, ...doc.data() }));
 
-    const contextAI = await construirContextoIAConMemoria(rutas, SEMANAS_MEMORIA_DEFECTO);
+    // 🔥 OPTIMIZACIÓN CRÍTICA: Reducimos drásticamente el tamaño del JSON enviado a OpenAI.
+    // Enviando solo lo esencial, evitamos saturar los tokens y provocamos que la IA responda en < 2s.
+    const rutasOptimizadas = rutas.map(r => ({
+      ruta_id: r.id,
+      nombre: r.zona || r.nombre || `Ruta ${r.ruta}`,
+      ocupacion_pct: r.porcentaje_ocupacion_max,
+      pasajeros: r.max_pasajeros_dia,
+      unidad: r['tipo de unidad'] || r.tipo_unidad
+    }));
+
+    const contextAI = await construirContextoIAConMemoria(rutasOptimizadas, SEMANAS_MEMORIA_DEFECTO);
 
     if (!openai) {
       return res.status(200).json({
@@ -2004,6 +2014,9 @@ app.get('/api/insights-automaticos', autorizar('insights:ver'), async (req, res)
         { role: 'user', content: `Analiza estos datos y genera el JSON: ${JSON.stringify(contextAI)}` }
       ],
       temperature: 0.2
+    }, {
+      timeout: 8500, // 👈 Timeout estricto de 8.5s para evitar que Vercel/Frontend lance Error 504
+      maxRetries: 0  // 👈 Sin reintentos para no retrasar la respuesta al usuario
     });
 
     // 4. Se lo enviamos procesado al Frontend
