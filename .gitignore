@@ -1,0 +1,19 @@
+# Node / Dependencias
+node_modules/
+
+# Datos crudos y sensibles (¡Crucial para ILPEA!)
+.env
+config/firebase-key.json
+firebase-key.json
+
+# Data Science (Si moviste la carpeta de Python aquí)
+data-science/data/*.xlsx
+data-science/data/*.csv
+data-science/data/*.pdf
+venv/
+env/
+__pycache__/
+
+# Logs y SO
+*.log
+.DS_Store
