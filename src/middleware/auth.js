@@ -5,6 +5,53 @@
 const admin = require('firebase-admin');
 const { ROLES, tienePermiso } = require('../config/roles');
 
+const TOKEN_CACHE_TTL_MS = Number(process.env.AUTH_TOKEN_CACHE_TTL_MS || 30_000);
+const USER_CACHE_TTL_MS = Number(process.env.AUTH_USER_CACHE_TTL_MS || 60_000);
+const tokenCache = new Map();
+const userCache = new Map();
+
+function cacheValido(entry) {
+  return entry && Number.isFinite(entry.expiresAt) && entry.expiresAt > Date.now();
+}
+
+function obtenerTokenCache(token) {
+  const entry = tokenCache.get(token);
+  if (!cacheValido(entry)) {
+    tokenCache.delete(token);
+    return null;
+  }
+  return entry.value;
+}
+
+function guardarTokenCache(token, decodedToken) {
+  tokenCache.set(token, {
+    value: decodedToken,
+    expiresAt: Date.now() + TOKEN_CACHE_TTL_MS,
+  });
+}
+
+function obtenerUsuarioCache(uid) {
+  const entry = userCache.get(uid);
+  if (!cacheValido(entry)) {
+    userCache.delete(uid);
+    return null;
+  }
+  return entry.value;
+}
+
+function guardarUsuarioCache(uid, userData) {
+  userCache.set(uid, {
+    value: userData,
+    expiresAt: Date.now() + USER_CACHE_TTL_MS,
+  });
+}
+
+function invalidarCacheUsuario(uid) {
+  if (uid) {
+    userCache.delete(uid);
+  }
+}
+
 /**
  * Middleware: Verificar token de Firebase y extraer datos del usuario
  * Busca el token en el header Authorization: Bearer <token>
@@ -22,13 +69,26 @@ async function autenticar(req, res, next) {
   const token = authHeader.substring(7); // Elimina "Bearer "
 
   try {
-    // Verificar el token con Firebase Admin SDK
-    const decodedToken = await admin.auth().verifyIdToken(token);
-    
-    // Obtener datos adicionales del usuario desde Firestore
-    const userDoc = await admin.firestore().collection('usuarios').doc(decodedToken.uid).get();
-    
-    if (!userDoc.exists) {
+    const decodedToken = obtenerTokenCache(token) || await admin.auth().verifyIdToken(token);
+    if (!obtenerTokenCache(token)) {
+      guardarTokenCache(token, decodedToken);
+    }
+
+    let userData = obtenerUsuarioCache(decodedToken.uid);
+    if (!userData) {
+      const userDoc = await admin.firestore().collection('usuarios').doc(decodedToken.uid).get();
+      if (!userDoc.exists) {
+        return res.status(404).json({
+          success: false,
+          message: 'Usuario no encontrado en la base de datos.'
+        });
+      }
+
+      userData = userDoc.data() || {};
+      guardarUsuarioCache(decodedToken.uid, userData);
+    }
+
+    if (!userData) {
       return res.status(404).json({
         success: false,
         message: 'Usuario no encontrado en la base de datos.'
@@ -39,9 +99,9 @@ async function autenticar(req, res, next) {
     req.usuario = {
       uid: decodedToken.uid,
       email: decodedToken.email,
-      rol: userDoc.data().rol || ROLES.EMPLEADO,
-      nombre: userDoc.data().nombre || 'Usuario',
-      ...userDoc.data()
+      rol: userData.rol || ROLES.EMPLEADO,
+      nombre: userData.nombre || 'Usuario',
+      ...userData
     };
 
     next();
@@ -115,7 +175,8 @@ function autenticarSimulado(req, res, next) {
     rol: rol,
     nombre: rol === ROLES.ADMIN ? 'Admin Simulado' : 
            rol === ROLES.JEFE ? 'Jefe Simulado' : 
-           'Empleado Simulado'
+           rol === ROLES.CAMIONERO ? 'Camionero Simulado' :
+             'Empleado Simulado'
   };
 
   next();
@@ -124,8 +185,18 @@ function autenticarSimulado(req, res, next) {
 /**
  * Middleware: Logging de acciones (auditoría)
  */
-function registrarAccion(coleccion = 'acciones') {
+function registrarAccion(coleccion = 'acciones', opciones = {}) {
+  const rutasExcluidas = new Set(Array.isArray(opciones.rutasExcluidas) ? opciones.rutasExcluidas : []);
+  const metodosExcluidos = new Set(Array.isArray(opciones.metodosExcluidos)
+    ? opciones.metodosExcluidos.map((metodo) => String(metodo).toUpperCase())
+    : []);
+
   return async (req, res, next) => {
+    const metodoActual = String(req.method || '').toUpperCase();
+    if (rutasExcluidas.has(req.path) || metodosExcluidos.has(metodoActual)) {
+      return next();
+    }
+
     // Capturar la respuesta original
     const originalJson = res.json.bind(res);
 
@@ -174,5 +245,6 @@ module.exports = {
   autenticar,
   autorizar,
   autenticarSimulado,
-  registrarAccion
+  registrarAccion,
+  invalidarCacheUsuario,
 };
