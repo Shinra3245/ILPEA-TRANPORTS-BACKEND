@@ -1,6 +1,6 @@
 // backend/src/lib/utils.js
 const admin = require('firebase-admin');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const path = require('path');
 const crypto = require('crypto');
 const { ROLES } = require('../config/roles');
@@ -44,12 +44,10 @@ function generarPasswordTemporal(longitud = 12) {
     return resultado;
 }
 
-let smtpTransporter = null;
-let smtpVerificado = false;
-let smtpFalloHasta = 0;
-const SMTP_BACKOFF_MS = Number(process.env.SMTP_BACKOFF_MS || 120_000);
-const SMTP_CONNECTION_TIMEOUT_MS = Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 8_000);
-const SMTP_SOCKET_TIMEOUT_MS = Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 12_000);
+let resendClient = null;
+let emailVerificado = false;
+let emailFalloHasta = 0;
+const EMAIL_BACKOFF_MS = Number(process.env.SMTP_BACKOFF_MS || 120_000);
 
 function normalizarVariableEntorno(valor) {
     const texto = String(valor || '').trim();
@@ -87,66 +85,28 @@ function escapeHtml(valor) {
         .replace(/'/g, '&#039;');
 }
 
-function obtenerTransporterSMTP() {
-    if (smtpTransporter) {
-        return smtpTransporter;
-    }
-
-    const host = normalizarVariableEntorno(process.env.MAIL_HOST);
-    const user = normalizarVariableEntorno(process.env.MAIL_USER);
-    const pass = normalizarVariableEntorno(process.env.MAIL_PASS);
-    const port = Number(process.env.MAIL_PORT || 465);
-    const secureExplicito = normalizarVariableEntorno(process.env.MAIL_SECURE).toLowerCase();
-    const secure = secureExplicito
-        ? secureExplicito !== 'false'
-        : port === 465;
-
-    if (!host || !user || !pass) {
-        return null;
-    }
-
-    smtpTransporter = nodemailer.createTransport({
-        host,
-        port,
-        secure,
-        auth: {
-            user,
-            pass
-        },
-        connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
-        greetingTimeout: SMTP_CONNECTION_TIMEOUT_MS,
-        socketTimeout: SMTP_SOCKET_TIMEOUT_MS,
-        ...(port === 587 && !secure ? { requireTLS: true } : {})
-    });
-
-    return smtpTransporter;
+function obtenerClienteResend() {
+    if (resendClient) return resendClient;
+    const apiKey = normalizarVariableEntorno(process.env.RESEND_API_KEY);
+    if (!apiKey) return null;
+    resendClient = new Resend(apiKey);
+    return resendClient;
 }
 
 async function verificarTransporterSMTP() {
-    const transporter = obtenerTransporterSMTP();
-    if (!transporter) {
-        return {
-            ok: false,
-            motivo: 'SMTP_NO_CONFIGURADO'
-        };
+    const client = obtenerClienteResend();
+    if (!client) {
+        return { ok: false, motivo: 'EMAIL_NO_CONFIGURADO' };
     }
-
-    if (smtpVerificado) {
+    if (emailVerificado) {
         return { ok: true, motivo: null };
     }
+    emailVerificado = true;
+    return { ok: true, motivo: null };
+}
 
-    try {
-        await transporter.verify();
-        smtpVerificado = true;
-        return { ok: true, motivo: null };
-    } catch (error) {
-        console.warn('Verificacion SMTP fallida:', error.message);
-        return {
-            ok: false,
-            motivo: 'SMTP_VERIFICACION_FALLIDA',
-            detalle: error.message
-        };
-    }
+function smtpEnBackoff() {
+    return Date.now() < emailFalloHasta;
 }
 
 function filaCredencialCorreo(etiqueta, valor, { destacado = false, monospace = false } = {}) {
@@ -643,22 +603,22 @@ async function enviarCorreoAsignacionSemanal(datos) {
     if (smtpEnBackoff()) {
         return {
             enviado: false,
-            motivo: 'SMTP_BACKOFF',
-            detalle: 'SMTP en pausa tras un fallo reciente.',
+            motivo: 'EMAIL_BACKOFF',
+            detalle: 'Proveedor de correo en pausa tras un fallo reciente.',
         };
     }
 
-    const transporter = obtenerTransporterSMTP();
-    if (!transporter) {
+    const client = obtenerClienteResend();
+    if (!client) {
         return {
             enviado: false,
-            motivo: 'SMTP_NO_CONFIGURADO',
-            detalle: 'Revisa MAIL_HOST, MAIL_USER, MAIL_PASS y MAIL_PORT en backend/.env',
+            motivo: 'EMAIL_NO_CONFIGURADO',
+            detalle: 'Configura RESEND_API_KEY y MAIL_FROM_EMAIL en las variables de entorno.',
         };
     }
 
     const remitenteEmail = normalizarVariableEntorno(
-        process.env.MAIL_FROM_EMAIL || process.env.MAIL_USER,
+        process.env.MAIL_FROM_EMAIL,
     );
     const remitenteNombre = normalizarVariableEntorno(
         process.env.MAIL_FROM_NAME || 'ILPEA TRANSPORTS',
@@ -669,27 +629,27 @@ async function enviarCorreoAsignacionSemanal(datos) {
     });
 
     try {
-        await transporter.sendMail({
-            from: remitenteEmail ? `"${remitenteNombre}" <${remitenteEmail}>` : undefined,
+        await client.emails.send({
+            from: `"${remitenteNombre}" <${remitenteEmail}>`,
             to: destinatario,
             subject: contenido.asunto,
             html: contenido.html,
             text: contenido.text,
         });
 
-        smtpFalloHasta = 0;
-        smtpVerificado = true;
+        emailFalloHasta = 0;
+        emailVerificado = true;
         return {
             enviado: true,
             motivo: null,
             destinatario,
         };
     } catch (error) {
-        smtpFalloHasta = Date.now() + SMTP_BACKOFF_MS;
+        emailFalloHasta = Date.now() + EMAIL_BACKOFF_MS;
         console.warn('No se pudo enviar correo de asignación semanal:', error.message);
         return {
             enviado: false,
-            motivo: 'SMTP_ENVIO_FALLIDO',
+            motivo: 'EMAIL_ENVIO_FALLIDO',
             detalle: error.message,
         };
     }
@@ -719,38 +679,34 @@ async function enviarCorreoRestablecimiento({ email, enlace }) {
     }
 
     if (smtpEnBackoff()) {
-        return { enviado: false, motivo: 'SMTP_BACKOFF', detalle: 'SMTP en pausa tras fallo reciente.' };
+        return { enviado: false, motivo: 'EMAIL_BACKOFF', detalle: 'Proveedor de correo en pausa tras fallo reciente.' };
     }
 
-    const transporter = obtenerTransporterSMTP();
-    if (!transporter) {
-        return { enviado: false, motivo: 'SMTP_NO_CONFIGURADO', detalle: 'Revisa MAIL_HOST, MAIL_USER, MAIL_PASS en backend/.env' };
+    const client = obtenerClienteResend();
+    if (!client) {
+        return { enviado: false, motivo: 'EMAIL_NO_CONFIGURADO', detalle: 'Configura RESEND_API_KEY y MAIL_FROM_EMAIL en las variables de entorno.' };
     }
 
-    const remitenteEmail = normalizarVariableEntorno(process.env.MAIL_FROM_EMAIL || process.env.MAIL_USER);
+    const remitenteEmail = normalizarVariableEntorno(process.env.MAIL_FROM_EMAIL);
     const remitenteNombre = normalizarVariableEntorno(process.env.MAIL_FROM_NAME || 'ILPEA TRANSPORTS');
     const contenido = construirContenidoCorreoRestablecimiento({ email: destinatario, enlace });
 
     try {
-        await transporter.sendMail({
-            from: remitenteEmail ? `"${remitenteNombre}" <${remitenteEmail}>` : undefined,
+        await client.emails.send({
+            from: `"${remitenteNombre}" <${remitenteEmail}>`,
             to: destinatario,
             subject: contenido.asunto,
             html: contenido.html,
             text: contenido.text,
         });
-        smtpFalloHasta = 0;
-        smtpVerificado = true;
+        emailFalloHasta = 0;
+        emailVerificado = true;
         return { enviado: true, motivo: null, destinatario };
     } catch (error) {
-        smtpFalloHasta = Date.now() + SMTP_BACKOFF_MS;
+        emailFalloHasta = Date.now() + EMAIL_BACKOFF_MS;
         console.warn('No se pudo enviar correo de restablecimiento:', error.message);
-        return { enviado: false, motivo: 'SMTP_ENVIO_FALLIDO', detalle: error.message };
+        return { enviado: false, motivo: 'EMAIL_ENVIO_FALLIDO', detalle: error.message };
     }
-}
-
-function smtpEnBackoff() {
-    return Date.now() < smtpFalloHasta;
 }
 
 async function enviarCorreoCredencialesAcceso({ nombre, email, password, rol, idEmpleado = null }) {
@@ -768,22 +724,20 @@ async function enviarCorreoCredencialesAcceso({ nombre, email, password, rol, id
     if (smtpEnBackoff()) {
         return {
             enviado: false,
-            motivo: 'SMTP_BACKOFF',
-            detalle: 'SMTP en pausa tras un fallo reciente. Revisa backend/.env o espera unos minutos.'
+            motivo: 'EMAIL_BACKOFF',
+            detalle: 'Proveedor de correo en pausa tras un fallo reciente. Espera unos minutos.'
         };
     }
 
-    const transporter = obtenerTransporterSMTP();
-    if (!transporter) {
+    const client = obtenerClienteResend();
+    if (!client) {
         return {
             enviado: false,
-            motivo: 'SMTP_NO_CONFIGURADO',
-            detalle: 'Revisa MAIL_HOST, MAIL_USER, MAIL_PASS y MAIL_PORT en backend/.env'
+            motivo: 'EMAIL_NO_CONFIGURADO',
+            detalle: 'Configura RESEND_API_KEY y MAIL_FROM_EMAIL en las variables de entorno.'
         };
     }
-    const remitenteEmail = normalizarVariableEntorno(
-        process.env.MAIL_FROM_EMAIL || process.env.MAIL_USER
-    );
+    const remitenteEmail = normalizarVariableEntorno(process.env.MAIL_FROM_EMAIL);
     const remitenteNombre = normalizarVariableEntorno(
         process.env.MAIL_FROM_NAME || 'ILPEA TRANSPORTS'
     );
@@ -796,27 +750,27 @@ async function enviarCorreoCredencialesAcceso({ nombre, email, password, rol, id
     });
 
     try {
-        await transporter.sendMail({
-            from: remitenteEmail ? `"${remitenteNombre}" <${remitenteEmail}>` : undefined,
+        await client.emails.send({
+            from: `"${remitenteNombre}" <${remitenteEmail}>`,
             to: destinatario,
             subject: contenido.asunto,
             html: contenido.html,
             text: contenido.text
         });
 
-        smtpFalloHasta = 0;
-        smtpVerificado = true;
+        emailFalloHasta = 0;
+        emailVerificado = true;
         return {
             enviado: true,
             motivo: null,
             destinatario
         };
     } catch (error) {
-        smtpFalloHasta = Date.now() + SMTP_BACKOFF_MS;
+        emailFalloHasta = Date.now() + EMAIL_BACKOFF_MS;
         console.warn(`No se pudo enviar correo de alta (${rol || 'usuario'}):`, error.message);
         return {
             enviado: false,
-            motivo: 'SMTP_ENVIO_FALLIDO',
+            motivo: 'EMAIL_ENVIO_FALLIDO',
             detalle: error.message
         };
     }
@@ -2946,7 +2900,7 @@ module.exports = {
     normalizarVariableEntorno,
     obtenerFrontendUrl,
     obtenerActionCodeSettingsAuth,
-    obtenerTransporterSMTP,
+    obtenerClienteResend,
     verificarTransporterSMTP,
     enviarCorreoCredencialesAcceso,
     enviarCorreoRestablecimiento,

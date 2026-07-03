@@ -14,9 +14,6 @@ venv/
 env/
 __pycache__/
 
-# Backups y datos exportados
-backups/
-
 # Logs y SO
 *.log
 .DS_Store
