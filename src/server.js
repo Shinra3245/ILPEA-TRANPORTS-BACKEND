@@ -27,6 +27,7 @@ const {
   programarEnvioCorreoAltaEmpleado,
   programarEnvioCorreoAltaJefe,
   programarEnvioCorreoAltaAdmin,
+  programarEnvioCorreoAltaCamionero,
   verificarTransporterSMTP,
   existeIdEmpleado,
   eliminarUsuarioDefinitivo,
@@ -5321,6 +5322,13 @@ app.post('/api/camioneros', autorizar('camioneros:crear'), async (req, res) => {
       creado_en: new Date(),
       actualizado_en: null,
       activo: true,
+    });
+
+    programarEnvioCorreoAltaCamionero({
+      nombre: String(nombre).trim(),
+      email: String(email).trim(),
+      idEmpleado: idCamioneroFinal,
+      password: passwordFinal,
     });
 
     res.status(201).json({

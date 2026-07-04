@@ -15,10 +15,14 @@
   "dependencies": {
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
+    "esbuild": "^0.28.1",
+    "esbuild-register": "^3.6.0",
     "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "firebase-admin": "^13.8.0",
-    "resend": "^4.0.0",
-    "openai": "^6.34.0"
+    "openai": "^6.34.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "resend": "^4.0.0"
   }
 }

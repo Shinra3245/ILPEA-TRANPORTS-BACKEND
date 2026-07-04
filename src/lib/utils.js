@@ -1,6 +1,7 @@
 // backend/src/lib/utils.js
 const admin = require('firebase-admin');
 const { Resend } = require('resend');
+const { renderCorreoCredenciales, renderCorreoRestablecimiento, renderCorreoAsignacionSemanal } = require('../../emails/index.js');
 const path = require('path');
 const crypto = require('crypto');
 const { ROLES } = require('../config/roles');
@@ -109,146 +110,32 @@ function smtpEnBackoff() {
     return Date.now() < emailFalloHasta;
 }
 
-function filaCredencialCorreo(etiqueta, valor, { destacado = false, monospace = false } = {}) {
-    const valorEstilo = [
-        'padding: 14px 18px',
-        'border-bottom: 1px solid #e5e7eb',
-        'color: #000000',
-        'font-size: 14px',
-        `font-weight: ${destacado ? '700' : '600'}`,
-        monospace ? "font-family: 'Courier New', Courier, monospace" : "font-family: Inter, Arial, sans-serif",
-        destacado ? 'background: #f0fdf4' : 'background: #ffffff',
-    ].join('; ');
-
-    return `
-      <tr>
-        <td style="padding: 14px 18px; border-bottom: 1px solid #e5e7eb; color: #6b7280; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; width: 38%; background: #f9fafb; font-family: Inter, Arial, sans-serif;">
-          ${etiqueta}
-        </td>
-        <td style="${valorEstilo}">
-          ${valor}
-        </td>
-      </tr>
-    `;
-}
-
 function construirContenidoCorreoCredenciales({ nombre, email, password, rol, idEmpleado = null }) {
     const rolNormalizado = String(rol || 'EMPLEADO').toUpperCase();
     const esAdmin = rolNormalizado === 'ADMIN';
     const esJefe = rolNormalizado === 'JEFE';
-    const perfil = esAdmin ? 'Administrador' : esJefe ? 'Jefe de turno' : 'Empleado';
-
-    const nombreSeguro = escapeHtml(nombre);
-    const emailSeguro = escapeHtml(email);
-    const passwordSeguro = escapeHtml(password);
-    const idSeguro = idEmpleado ? escapeHtml(idEmpleado) : null;
-
-    const filasHtml = [
-        filaCredencialCorreo('Perfil', escapeHtml(perfil)),
-        ...(idSeguro ? [filaCredencialCorreo('ID empleado', idSeguro, { monospace: true })] : []),
-        filaCredencialCorreo('Nombre', nombreSeguro),
-        filaCredencialCorreo('Correo', emailSeguro),
-        filaCredencialCorreo('Contraseña temporal', passwordSeguro, { destacado: true, monospace: true }),
-    ];
-
-    const lineasCredencialesTexto = [
-        `Perfil: ${perfil}`,
-        ...(idEmpleado ? [`ID empleado: ${idEmpleado}`] : []),
-        `Nombre: ${nombre}`,
-        `Correo: ${email}`,
-        `Contraseña temporal: ${password}`,
-    ];
+    const esCamionero = rolNormalizado === 'CAMIONERO';
+    const perfil = esAdmin ? 'Administrador' : esJefe ? 'Jefe de turno' : esCamionero ? 'Camionero' : 'Empleado';
 
     const asunto = esAdmin
         ? 'Acceso de administrador — ILPEA Transporte'
         : esJefe
             ? 'Acceso de jefe de turno — ILPEA Transporte'
-            : 'Credenciales de acceso — ILPEA Transporte';
+            : esCamionero
+                ? 'Credenciales de camionero — ILPEA Transporte'
+                : 'Credenciales de acceso — ILPEA Transporte';
 
     const urlLogin = normalizarVariableEntorno(process.env.FRONTEND_URL || process.env.APP_URL || '');
-    const botonLogin = urlLogin
-        ? `
-        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 28px auto 8px;">
-          <tr>
-            <td style="border-radius: 8px; background: #000000;">
-              <a href="${escapeHtml(urlLogin)}" target="_blank" rel="noopener noreferrer"
-                style="display: inline-block; padding: 14px 28px; font-family: Inter, Arial, sans-serif; font-size: 14px; font-weight: 700; color: #ffffff; text-decoration: none; letter-spacing: 0.03em;">
-                Ingresar al sistema
-              </a>
-            </td>
-          </tr>
-        </table>
-        <p style="margin: 0; text-align: center; font-size: 12px; color: #6b7280; font-family: Inter, Arial, sans-serif;">
-          ${escapeHtml(urlLogin)}
-        </p>
-      `
-        : '';
 
-    const html = `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${escapeHtml(asunto)}</title>
-</head>
-<body style="margin: 0; padding: 0; background: #f3f4f6; font-family: Inter, Arial, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background: #f3f4f6; padding: 32px 16px;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; background: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e7eb; box-shadow: 0 4px 24px rgba(0,0,0,0.06);">
-          <tr>
-            <td style="background: #000000; padding: 28px 32px 24px;">
-              <p style="margin: 0 0 4px; font-size: 22px; font-weight: 800; color: #ffffff; letter-spacing: -0.02em;">ILPEA Transporte</p>
-              <p style="margin: 0; font-size: 13px; color: #9ca3af; letter-spacing: 0.06em; text-transform: uppercase;">Gestión de flota</p>
-            </td>
-          </tr>
-          <tr>
-            <td style="height: 4px; background: #107c41; font-size: 0; line-height: 0;">&nbsp;</td>
-          </tr>
-          <tr>
-            <td style="padding: 32px 32px 8px;">
-              <p style="margin: 0 0 8px; font-size: 18px; font-weight: 700; color: #000000;">Bienvenido(a), ${nombreSeguro}</p>
-              <p style="margin: 0; font-size: 15px; line-height: 1.6; color: #374151;">
-                Se creó tu cuenta de <strong>${escapeHtml(perfil)}</strong> en ILPEA Transporte.
-                Usa las credenciales siguientes para iniciar sesión.
-              </p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding: 20px 32px 8px;">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden;">
-                ${filasHtml.join('')}
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding: 16px 32px 8px;">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background: #fffbeb; border-left: 4px solid #f59e0b; border-radius: 8px;">
-                <tr>
-                  <td style="padding: 14px 16px; font-size: 13px; line-height: 1.5; color: #92400e;">
-                    Por seguridad, cambia tu contraseña después del primer acceso.
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          ${botonLogin ? `<tr><td style="padding: 8px 32px 32px;">${botonLogin}</td></tr>` : '<tr><td style="padding-bottom: 32px;"></td></tr>'}
-          <tr>
-            <td style="padding: 20px 32px; background: #f9fafb; border-top: 1px solid #e5e7eb;">
-              <p style="margin: 0; font-size: 12px; line-height: 1.5; color: #6b7280; text-align: center;">
-                Mensaje automático de ILPEA Transporte. No respondas a este correo.<br />
-                Si no solicitaste esta cuenta, contacta a tu administrador.
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-  `.trim();
+    const rows = [
+        { label: 'Perfil', value: escapeHtml(perfil) },
+        ...(idEmpleado ? [{ label: 'ID empleado', value: escapeHtml(idEmpleado), monospace: true }] : []),
+        { label: 'Nombre', value: escapeHtml(nombre) },
+        { label: 'Correo', value: escapeHtml(email) },
+        { label: 'Contraseña temporal', value: escapeHtml(password), destacado: true, monospace: true },
+    ];
+
+    const html = renderCorreoCredenciales({ nombre, email, password, rol, idEmpleado, urlLogin, asunto, perfil, rows });
 
     const text = [
         'ILPEA Transporte — Gestión de flota',
@@ -256,7 +143,11 @@ function construirContenidoCorreoCredenciales({ nombre, email, password, rol, id
         `Hola ${nombre},`,
         `Se creó tu cuenta de ${perfil}.`,
         '',
-        ...lineasCredencialesTexto,
+        `Perfil: ${perfil}`,
+        ...(idEmpleado ? [`ID empleado: ${idEmpleado}`] : []),
+        `Nombre: ${nombre}`,
+        `Correo: ${email}`,
+        `Contraseña temporal: ${password}`,
         '',
         'Por seguridad, cambia tu contraseña después del primer acceso.',
         ...(urlLogin ? ['', `Ingresar: ${urlLogin}`] : []),
@@ -268,125 +159,15 @@ function construirContenidoCorreoCredenciales({ nombre, email, password, rol, id
 }
 
 function construirContenidoCorreoRestablecimiento({ email, enlace }) {
-    const emailSeguro = escapeHtml(email);
-    const enlaceSeguro = escapeHtml(enlace);
-
     const asunto = 'Restablece tu contraseña — ILPEA Transporte';
-
-    const html = `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${escapeHtml(asunto)}</title>
-</head>
-<body style="margin: 0; padding: 0; background: #f3f4f6; font-family: Inter, Arial, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background: #f3f4f6; padding: 32px 16px;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; background: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e7eb; box-shadow: 0 4px 24px rgba(0,0,0,0.06);">
-          <!-- Encabezado -->
-          <tr>
-            <td style="background: #000000; padding: 28px 32px 24px;">
-              <p style="margin: 0 0 4px; font-size: 22px; font-weight: 800; color: #ffffff; letter-spacing: -0.02em;">ILPEA Transporte</p>
-              <p style="margin: 0; font-size: 13px; color: #9ca3af; letter-spacing: 0.06em; text-transform: uppercase;">Gestión de flota</p>
-            </td>
-          </tr>
-          <tr>
-            <td style="height: 4px; background: #107c41; font-size: 0; line-height: 0;">&nbsp;</td>
-          </tr>
-          <!-- Cuerpo -->
-          <tr>
-            <td style="padding: 32px 32px 8px;">
-              <p style="margin: 0 0 8px; font-size: 18px; font-weight: 700; color: #000000;">Restablece tu contraseña</p>
-              <p style="margin: 0; font-size: 15px; line-height: 1.6; color: #374151;">
-                Recibimos una solicitud para restablecer la contraseña de la cuenta asociada a
-                <strong style="color: #000000;">${emailSeguro}</strong>.
-              </p>
-            </td>
-          </tr>
-          <!-- Tabla de info -->
-          <tr>
-            <td style="padding: 20px 32px 8px;">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden;">
-                <tr>
-                  <td style="padding: 14px 18px; border-bottom: 1px solid #e5e7eb; color: #6b7280; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; width: 38%; background: #f9fafb; font-family: Inter, Arial, sans-serif;">
-                    Correo
-                  </td>
-                  <td style="padding: 14px 18px; border-bottom: 1px solid #e5e7eb; color: #000000; font-size: 14px; font-weight: 600; background: #ffffff; font-family: Inter, Arial, sans-serif;">
-                    ${emailSeguro}
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding: 14px 18px; color: #6b7280; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; width: 38%; background: #f9fafb; font-family: Inter, Arial, sans-serif;">
-                    Validez del enlace
-                  </td>
-                  <td style="padding: 14px 18px; color: #000000; font-size: 14px; font-weight: 600; background: #ffffff; font-family: Inter, Arial, sans-serif;">
-                    1 hora
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <!-- Botón -->
-          <tr>
-            <td style="padding: 24px 32px 8px;">
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
-                <tr>
-                  <td style="border-radius: 8px; background: #107c41;">
-                    <a href="${enlaceSeguro}" target="_blank" rel="noopener noreferrer"
-                      style="display: inline-block; padding: 14px 28px; font-family: Inter, Arial, sans-serif; font-size: 14px; font-weight: 700; color: #ffffff; text-decoration: none; letter-spacing: 0.03em;">
-                      Restablecer contraseña
-                    </a>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <!-- Enlace alternativo -->
-          <tr>
-            <td style="padding: 8px 32px 16px;">
-              <p style="margin: 0 0 4px; font-size: 12px; color: #6b7280;">Si el botón no funciona, copia este enlace en tu navegador:</p>
-              <p style="margin: 0; font-size: 12px; color: #107c41; word-break: break-all;">${enlaceSeguro}</p>
-            </td>
-          </tr>
-          <!-- Aviso de seguridad -->
-          <tr>
-            <td style="padding: 0 32px 24px;">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background: #fffbeb; border-left: 4px solid #f59e0b; border-radius: 8px;">
-                <tr>
-                  <td style="padding: 14px 16px; font-size: 13px; line-height: 1.5; color: #92400e;">
-                    Si no solicitaste este cambio, ignora este correo. Tu contraseña no será modificada.
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <!-- Pie -->
-          <tr>
-            <td style="padding: 20px 32px; background: #f9fafb; border-top: 1px solid #e5e7eb;">
-              <p style="margin: 0; font-size: 12px; line-height: 1.5; color: #6b7280; text-align: center;">
-                Mensaje automático de ILPEA Transporte. No respondas a este correo.<br />
-                Si no solicitaste restablecer tu contraseña, contacta a tu administrador.
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-    `.trim();
-
+    const html = renderCorreoRestablecimiento({ email, enlace });
     const text = [
         'ILPEA Transporte — Gestión de flota',
         '',
         'Restablece tu contraseña',
         '',
         `Cuenta: ${email}`,
-        `Validez del enlace: 1 hora`,
+        'Validez del enlace: 1 hora',
         '',
         `Enlace para restablecer: ${enlace}`,
         '',
@@ -394,7 +175,6 @@ function construirContenidoCorreoRestablecimiento({ email, enlace }) {
         '',
         'Mensaje automático. No respondas a este correo.',
     ].join('\n');
-
     return { asunto, html, text };
 }
 
@@ -438,29 +218,11 @@ function construirContenidoCorreoAsignacionSemanal({
     unidadTipo = null,
     esActualizacion = false,
 }) {
-    const nombreSeguro = escapeHtml(nombre);
-    const emailSeguro = escapeHtml(email);
-    const semanaLegible = escapeHtml(formatearSemanaLegible(semana));
-    const turnoSeguro = escapeHtml(turnoNombre);
-    const rutaSegura = escapeHtml(rutaNombre || (rutaNumero ? `Ruta ${rutaNumero}` : 'Sin ruta'));
+    const rutaSegura = rutaNombre || (rutaNumero ? `Ruta ${rutaNumero}` : 'Sin ruta');
     const fechasLegibles = fechasOperacion.map((fecha) => formatearFechaLegibleCorreo(fecha));
     const fechasTexto = fechasLegibles.length
-        ? fechasLegibles.map((fecha) => escapeHtml(fecha)).join('<br />')
+        ? fechasLegibles.map((f) => escapeHtml(f)).join('<br />')
         : 'Por confirmar';
-
-    const filasHtml = [
-        filaCredencialCorreo('Semana', semanaLegible),
-        filaCredencialCorreo('Fecha de viaje', fechasTexto),
-        filaCredencialCorreo('Turno', turnoSeguro),
-        filaCredencialCorreo('Ruta', rutaSegura),
-        ...(asiento ? [filaCredencialCorreo('Asiento', String(asiento), { destacado: true })] : []),
-        ...(paradaNombre ? [filaCredencialCorreo('Parada', escapeHtml(paradaNombre))] : []),
-        ...(unidadCodigo || unidadTipo
-            ? [filaCredencialCorreo('Unidad', escapeHtml([unidadCodigo, unidadTipo].filter(Boolean).join(' · ')))]
-            : []),
-        ...(idEmpleado ? [filaCredencialCorreo('ID empleado', escapeHtml(idEmpleado), { monospace: true })] : []),
-        filaCredencialCorreo('Correo', emailSeguro),
-    ];
 
     const asunto = esActualizacion
         ? 'Actualización de tu asignación — ILPEA Transporte'
@@ -473,97 +235,28 @@ function construirContenidoCorreoAsignacionSemanal({
 
     const urlBase = normalizarVariableEntorno(process.env.FRONTEND_URL || process.env.APP_URL || '');
     const urlPanel = urlBase ? `${urlBase.replace(/\/$/, '')}/empleado` : '';
-    const botonPanel = urlPanel
-        ? `
-        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 28px auto 8px;">
-          <tr>
-            <td style="border-radius: 8px; background: #107c41;">
-              <a href="${escapeHtml(urlPanel)}" target="_blank" rel="noopener noreferrer"
-                style="display: inline-block; padding: 14px 28px; font-family: Inter, Arial, sans-serif; font-size: 14px; font-weight: 700; color: #ffffff; text-decoration: none; letter-spacing: 0.03em;">
-                Ver mi asignación
-              </a>
-            </td>
-          </tr>
-        </table>
-        <p style="margin: 0; text-align: center; font-size: 12px; color: #6b7280; font-family: Inter, Arial, sans-serif;">
-          ${escapeHtml(urlPanel)}
-        </p>
-      `
-        : '';
 
-    const html = `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${escapeHtml(asunto)}</title>
-</head>
-<body style="margin: 0; padding: 0; background: #f3f4f6; font-family: Inter, Arial, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background: #f3f4f6; padding: 32px 16px;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; background: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e7eb; box-shadow: 0 4px 24px rgba(0,0,0,0.06);">
-          <tr>
-            <td style="background: #000000; padding: 28px 32px 24px;">
-              <p style="margin: 0 0 4px; font-size: 22px; font-weight: 800; color: #ffffff; letter-spacing: -0.02em;">ILPEA Transporte</p>
-              <p style="margin: 0; font-size: 13px; color: #9ca3af; letter-spacing: 0.06em; text-transform: uppercase;">Gestión de flota</p>
-            </td>
-          </tr>
-          <tr>
-            <td style="height: 4px; background: #107c41; font-size: 0; line-height: 0;">&nbsp;</td>
-          </tr>
-          <tr>
-            <td style="padding: 32px 32px 8px;">
-              <p style="margin: 0 0 8px; font-size: 18px; font-weight: 700; color: #000000;">${escapeHtml(titulo)}</p>
-              <p style="margin: 0 0 8px; font-size: 15px; line-height: 1.6; color: #374151;">
-                Hola <strong style="color: #000000;">${nombreSeguro}</strong>,
-              </p>
-              <p style="margin: 0; font-size: 15px; line-height: 1.6; color: #374151;">
-                ${escapeHtml(intro)}
-              </p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding: 20px 32px 8px;">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden;">
-                ${filasHtml.join('')}
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding: 16px 32px 8px;">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background: #ecfdf5; border-left: 4px solid #107c41; border-radius: 8px;">
-                <tr>
-                  <td style="padding: 14px 16px; font-size: 13px; line-height: 1.5; color: #065f46;">
-                    Presenta tu código QR en el abordaje el día de tu viaje. Si tienes dudas, contacta a tu jefe de turno.
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          ${botonPanel ? `<tr><td style="padding: 8px 32px 32px;">${botonPanel}</td></tr>` : '<tr><td style="padding-bottom: 32px;"></td></tr>'}
-          <tr>
-            <td style="padding: 20px 32px; background: #f9fafb; border-top: 1px solid #e5e7eb;">
-              <p style="margin: 0; font-size: 12px; line-height: 1.5; color: #6b7280; text-align: center;">
-                Mensaje automático de ILPEA Transporte. No respondas a este correo.<br />
-                Si detectas un error en tu asignación, contacta a tu administrador o jefe de turno.
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-    `.trim();
+    const rows = [
+        { label: 'Semana', value: escapeHtml(formatearSemanaLegible(semana)) },
+        { label: 'Fecha de viaje', value: fechasTexto },
+        { label: 'Turno', value: escapeHtml(turnoNombre) },
+        { label: 'Ruta', value: escapeHtml(rutaSegura) },
+        ...(asiento ? [{ label: 'Asiento', value: escapeHtml(String(asiento)), destacado: true }] : []),
+        ...(paradaNombre ? [{ label: 'Parada', value: escapeHtml(paradaNombre) }] : []),
+        ...(unidadCodigo || unidadTipo
+            ? [{ label: 'Unidad', value: escapeHtml([unidadCodigo, unidadTipo].filter(Boolean).join(' · ')) }]
+            : []),
+        ...(idEmpleado ? [{ label: 'ID empleado', value: escapeHtml(idEmpleado), monospace: true }] : []),
+        { label: 'Correo', value: escapeHtml(email) },
+    ];
+
+    const html = renderCorreoAsignacionSemanal({ nombre, titulo, intro, asunto, rows, urlPanel, esActualizacion });
 
     const lineasTexto = [
         `Semana: ${formatearSemanaLegible(semana)}`,
         `Fecha de viaje: ${fechasLegibles.join(', ') || 'Por confirmar'}`,
         `Turno: ${turnoNombre}`,
-        `Ruta: ${rutaNombre || (rutaNumero ? `Ruta ${rutaNumero}` : 'Sin ruta')}`,
+        `Ruta: ${rutaSegura}`,
         ...(asiento ? [`Asiento: ${asiento}`] : []),
         ...(paradaNombre ? [`Parada: ${paradaNombre}`] : []),
         ...(unidadCodigo || unidadTipo ? [`Unidad: ${[unidadCodigo, unidadTipo].filter(Boolean).join(' · ')}`] : []),
@@ -814,6 +507,13 @@ function programarEnvioCorreoAltaAdmin(datos) {
     programarEnvioCorreoCredencialesAcceso({
         ...datos,
         rol: 'ADMIN'
+    });
+}
+
+function programarEnvioCorreoAltaCamionero(datos) {
+    programarEnvioCorreoCredencialesAcceso({
+        ...datos,
+        rol: 'CAMIONERO'
     });
 }
 
@@ -2908,6 +2608,7 @@ module.exports = {
     programarEnvioCorreoAltaEmpleado,
     programarEnvioCorreoAltaJefe,
     programarEnvioCorreoAltaAdmin,
+    programarEnvioCorreoAltaCamionero,
     enviarCorreoAltaEmpleado,
     enviarCorreoAltaJefe,
     enviarCorreoAltaAdmin,
